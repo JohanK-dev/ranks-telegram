@@ -1,0 +1,14 @@
+{
+  "name": "ranks-scoring-telegram",
+  "version": "2.2.0",
+  "description": "IRC #Ranks scoring game — Telegram bot interface",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "irc": "^0.5.2",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
