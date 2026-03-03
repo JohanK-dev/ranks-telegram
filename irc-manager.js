@@ -1,5 +1,6 @@
 const irc = require("irc");
 const EventEmitter = require("events");
+const parseQuestion = require("./parseQuestion");
 
 class IrcManager extends EventEmitter {
   constructor(config) {
@@ -101,99 +102,7 @@ class IrcManager extends EventEmitter {
   }
 
   _parseQuestion(text) {
-    // Message format from MACHINE[]:
-    //   "Please /MSG me the answer of the RED text  5+3  7+4  \x03044+9"
-    // "logic":
-    // 1. Find all colored equations and track their positions
-    // 2. Strip all IRC color codes from the text
-    // 3. Find all equations in the stripped text
-    // 4. Mark the one that was red
-
-    // IRC color: \x03 followed by 1-2 digit code, optionally a comma and background color
-    const colorPattern = /\x03(\d{1,2})(?:,\d{1,2})?/g;
-    const colorPositions = new Map();
-
-    let stripped = "";
-    let lastIndex = 0;
-    let colorMatch;
-
-    const colorCodes = [];
-    while ((colorMatch = colorPattern.exec(text)) !== null) {
-      colorCodes.push({
-        originalIndex: colorMatch.index,
-        length: colorMatch[0].length,
-        colorCode: parseInt(colorMatch[1]),
-      });
-    }
-
-    // Strip all IRC formatting codes (\x03 colors, \x02 bold, \x0F reset, \x1D italic, \x1F underline)
-    stripped = text.replace(/\x03(\d{1,2}(?:,\d{1,2})?)?|\x02|\x0F|\x1D|\x1F/g, "");
-
-    // Find all equations in the stripped text
-    const equationPattern = /\b(\d+[+\-*\/]\d+)\b/g;
-    const equations = [];
-    let eqMatch;
-
-    while ((eqMatch = equationPattern.exec(stripped)) !== null) {
-      equations.push({
-        equation: eqMatch[1],
-        isRed: false,
-        colorCode: -1,
-        strippedIndex: eqMatch.index,
-      });
-    }
-
-    // Determine which equation is red by checking if \x0304 precedes it in the original
-    for (const eq of equations) {
-      const redBeforeEq = new RegExp(
-        `\\x0304\\s*${eq.equation.replace(/([+*\\/])/g, "\\$1")}`,
-      );
-      if (redBeforeEq.test(text)) {
-        eq.isRed = true;
-        eq.colorCode = 4;
-      }
-    }
-
-    // ─── Validation ──────────────────────────────────────────
-    if (equations.length === 0) {
-      return {
-        success: false,
-        error: `No equations found in message at all. Expected patterns like "5+3", "12-4", "3*7".`,
-      };
-    }
-
-    const redEquations = equations.filter((eq) => eq.isRed);
-
-    if (redEquations.length === 0) {
-      return {
-        success: false,
-        error: `Found ${equations.length} equation(s) [${equations.map((e) => e.equation).join(", ")}] but none was preceded by red color code (\\x0304). Cannot determine which to answer.`,
-      };
-    }
-
-    if (redEquations.length > 1) {
-      return {
-        success: false,
-        error: `Found ${redEquations.length} red equations — ambiguous. Expected exactly 1. Equations: [${redEquations.map((e) => e.equation).join(", ")}]`,
-      };
-    }
-
-    // Clean up internal tracking fields
-    const cleanEquations = equations.map(({ equation, isRed, colorCode }) => ({
-      equation,
-      isRed,
-      colorCode,
-    }));
-
-    return {
-      success: true,
-      question: {
-        equations: cleanEquations,
-        redEquation: cleanEquations.find((eq) => eq.isRed),
-        raw: text,
-        timestamp: Date.now(),
-      },
-    };
+  return parseQuestion(text);
   }
 
   sendAnswer(answer) {
