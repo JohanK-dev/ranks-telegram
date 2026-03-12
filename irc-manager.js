@@ -42,8 +42,18 @@ class IrcManager extends EventEmitter {
     });
 
     this.client.addListener("raw", (message) => {
-      this._handleRawMessage(message);
-    });
+      if (message.rawCommand === "433") {
+        // 433 = ERR_NICKNAMEINUSE
+        const currentNick = this.client.nick || this.config.nickname;
+        const newNick = currentNick + "}";
+        console.log(`[IRC] Nick "${currentNick}" in use, retrying as "${newNick}"`);
+        this.client.send("NICK", newNick);
+        this.client.nick = newNick; // Keep internal state in sync
+        return;
+      }
+
+  this._handleRawMessage(message);
+});
 
     this.client.addListener("error", (error) => {
       console.error("[IRC] Error:", error.command, error.args?.join(" "));
