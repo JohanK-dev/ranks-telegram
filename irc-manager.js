@@ -31,6 +31,15 @@ class IrcManager extends EventEmitter {
     this.client.addListener("registered", () => {
       console.log("[IRC] Connected and registered on QuakeNet");
       this.connected = true;
+
+      const base = this.config.nickname;
+      const validNick = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\}*$`);
+      if (!validNick.test(this.client.nick)) {
+        console.log(`[IRC] Registered as "${this.client.nick}", correcting to "${base}"`);
+        this.client.nick = base;
+        this.client.send("NICK", base);
+      }
+
       this.emit("connected");
     });
 
