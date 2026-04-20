@@ -1,5 +1,5 @@
 module.exports = {
-  // IRC settings
+  // IRC settings. Rename this to Config.js to start using
   irc: {
     server: "irc.quakenet.org",
     port: 6667,
