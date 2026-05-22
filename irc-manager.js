@@ -8,9 +8,42 @@ class IrcManager extends EventEmitter {
     this.config = config;
     this.client = null;
     this.connected = false;
+    this._nickAttempt = 0;
+    this._nickWatcher = null;
+  }
+
+  // "Nick}" → "Nick", "Nick}}" → "Nick"
+  _getNickBase() {
+    return this.config.nickname.replace(/\}+$/, "");
+  }
+
+  // 0 → "Nick}", 1 → "Nick{", 2 → "Nick{{", …
+  _getNickForAttempt(n) {
+    if (n === 0) return this.config.nickname;
+    return this._getNickBase() + "{".repeat(n);
+  }
+
+  _startNickWatcher() {
+    if (this._nickWatcher) clearInterval(this._nickWatcher);
+    this._nickWatcher = setInterval(() => {
+      if (!this.connected || !this.client) return;
+      const current = this.client.nick;
+      if (current === this.config.nickname) return;
+      // Current nick is not what we want — try to reclaim the base nick.
+      // If 433 comes back the raw handler will walk through the fallback sequence.
+      this._nickAttempt = 0;
+      console.log(`[IRC] Nick watcher: current "${current}", requesting "${this.config.nickname}"`);
+      this.client.send("NICK", this.config.nickname);
+    }, 10000);
   }
 
   connect() {
+    if (this._nickWatcher) {
+      clearInterval(this._nickWatcher);
+      this._nickWatcher = null;
+    }
+    this._nickAttempt = 0;
+
     console.log(
       `[IRC] Connecting to ${this.config.server} as ${this.config.nickname}...`
     );
@@ -31,15 +64,14 @@ class IrcManager extends EventEmitter {
     this.client.addListener("registered", () => {
       console.log("[IRC] Connected and registered on QuakeNet");
       this.connected = true;
+      this._nickAttempt = 0;
 
-      const base = this.config.nickname;
-      const validNick = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\}*$`);
-      if (!validNick.test(this.client.nick)) {
-        console.log(`[IRC] Registered as "${this.client.nick}", correcting to "${base}"`);
-        this.client.nick = base;
-        this.client.send("NICK", base);
+      if (this.client.nick !== this.config.nickname) {
+        console.log(`[IRC] Registered as "${this.client.nick}", requesting "${this.config.nickname}"`);
+        this.client.send("NICK", this.config.nickname);
       }
 
+      this._startNickWatcher();
       this.emit("connected");
     });
 
@@ -52,17 +84,22 @@ class IrcManager extends EventEmitter {
 
     this.client.addListener("raw", (message) => {
       if (message.rawCommand === "433") {
-        // 433 = ERR_NICKNAMEINUSE
-        const currentNick = this.client.nick || this.config.nickname;
-        const newNick = currentNick + "}";
-        console.log(`[IRC] Nick "${currentNick}" in use, retrying as "${newNick}"`);
+        // 433 = ERR_NICKNAMEINUSE — walk through our fallback sequence
+        this._nickAttempt++;
+        const newNick = this._getNickForAttempt(this._nickAttempt);
+        if (newNick === this.client.nick) {
+          // Already holding the best available nick in the sequence; stay put.
+          console.log(`[IRC] Already holding best available nick "${newNick}"`);
+          return;
+        }
+        console.log(`[IRC] Nick in use, trying "${newNick}"`);
         this.client.send("NICK", newNick);
-        this.client.nick = newNick; // Keep internal state in sync
+        this.client.nick = newNick;
         return;
       }
 
-  this._handleRawMessage(message);
-});
+      this._handleRawMessage(message);
+    });
 
     this.client.addListener("error", (error) => {
       console.error("[IRC] Error:", error.command, error.args?.join(" "));
@@ -76,6 +113,10 @@ class IrcManager extends EventEmitter {
     this.client.addListener("abort", () => {
       console.error("[IRC] Connection aborted after max retries");
       this.connected = false;
+      if (this._nickWatcher) {
+        clearInterval(this._nickWatcher);
+        this._nickWatcher = null;
+      }
       setTimeout(() => this.connect(), 30000);
     });
   }
@@ -136,6 +177,10 @@ class IrcManager extends EventEmitter {
   }
 
   disconnect() {
+    if (this._nickWatcher) {
+      clearInterval(this._nickWatcher);
+      this._nickWatcher = null;
+    }
     if (this.client) {
       this.client.disconnect("Leaving");
       this.connected = false;
