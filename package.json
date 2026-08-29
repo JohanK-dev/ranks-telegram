@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test **/*.test.js"
+    "test": "node --test **/*.test.js",
+    "deploy": "./deploy.sh"
   },
   "dependencies": {
     "irc": "^0.5.2",
