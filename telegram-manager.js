@@ -17,8 +17,23 @@ class TelegramManager {
       process.exit(1);
     }
 
-    this.bot = new TelegramBot(this.config.botToken, { polling: true });
+    this.bot = new TelegramBot(this.config.botToken, {
+      polling: true,
+      // The underlying HTTP client has no timeout by default and reuses
+      // keep-alive sockets (`forever: true`). If a connection dies silently
+      // mid-poll (e.g. router reboot, dropped NAT entry) instead of closing
+      // cleanly, the in-flight getUpdates request can hang forever — no
+      // error, no retry, polling just stalls permanently. This timeout
+      // bounds every request so a dead connection eventually errors out and
+      // the library's built-in retry loop takes back over. Kept above the
+      // 10s long-poll hold Telegram's server does for getUpdates.
+      request: { timeout: 15000 },
+    });
     console.log("[TG] Bot started, polling for messages...");
+
+    this.bot.on("polling_error", (err) => {
+      console.error("[TG] Polling error:", err.message);
+    });
 
     // Handle /start command
     this.bot.onText(/\/start/, (msg) => {
@@ -36,7 +51,9 @@ class TelegramManager {
         `/pause — stop receiving questions\n` +
         `/resume — start receiving questions again`,
         { parse_mode: "HTML" }
-      );
+      ).catch((err) => {
+        console.error(`[TG] Failed to send /start reply to ${chatId}:`, err.message);
+      });
     });
 
     // Handle /status command
@@ -47,7 +64,9 @@ class TelegramManager {
       const status = this.onStatusRequest ? this.onStatusRequest() : "Unknown";
       const pauseStatus = paused ? "\nNotifications: ⏸ Paused" : "\nNotifications: ▶ Active";
 
-      this.bot.sendMessage(msg.chat.id, status + pauseStatus, { parse_mode: "Markdown" });
+      this.bot.sendMessage(msg.chat.id, status + pauseStatus, { parse_mode: "Markdown" }).catch((err) => {
+        console.error(`[TG] Failed to send /status reply to ${msg.chat.id}:`, err.message);
+      });
     });
 
     // Handle /pause command
@@ -56,7 +75,9 @@ class TelegramManager {
 
       this.pausedUsers.add(msg.from.id);
       console.log(`[TG] User ${msg.from.id} paused notifications`);
-      this.bot.sendMessage(msg.chat.id, "⏸ Notifications paused. Use /resume to start receiving questions again.");
+      this.bot.sendMessage(msg.chat.id, "⏸ Notifications paused. Use /resume to start receiving questions again.").catch((err) => {
+        console.error(`[TG] Failed to send /pause reply to ${msg.chat.id}:`, err.message);
+      });
     });
 
     // Handle /resume command
@@ -65,7 +86,9 @@ class TelegramManager {
 
       this.pausedUsers.delete(msg.from.id);
       console.log(`[TG] User ${msg.from.id} resumed notifications`);
-      this.bot.sendMessage(msg.chat.id, "▶ Notifications resumed. You will receive scoring questions again.");
+      this.bot.sendMessage(msg.chat.id, "▶ Notifications resumed. You will receive scoring questions again.").catch((err) => {
+        console.error(`[TG] Failed to send /resume reply to ${msg.chat.id}:`, err.message);
+      });
     });
 
     // Handle all other messages as potential answers
