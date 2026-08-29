@@ -33,8 +33,14 @@ class IrcManager extends EventEmitter {
       this.connected = true;
 
       if (this.client.nick !== this.config.nickname) {
-        console.log(`[IRC] Registered as "${this.client.nick}", requesting "${this.config.nickname}"`);
-        this.client.send("NICK", this.config.nickname);
+        // Don't retry NICK here — we just failed to get it during the
+        // connection handshake (that's why we're on a fallback nick), so
+        // an immediate retry would only collide again. The irc library's
+        // own 433 handler reacts to that collision by renaming us to yet
+        // another fallback, producing a visible, pointless nick change.
+        // The nick/quit listeners below reclaim it reactively once it
+        // actually frees up.
+        console.log(`[IRC] Registered as "${this.client.nick}", will reclaim "${this.config.nickname}" once it frees up`);
       }
 
       this.emit("connected");
