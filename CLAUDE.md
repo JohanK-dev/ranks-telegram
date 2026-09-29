@@ -21,11 +21,16 @@ This bot bridges the IRC game `#Ranks` on QuakeNet to Telegram. A bot called `MA
 
 ### Module responsibilities
 
-- **`server.js`** — Wires `IrcManager` and `TelegramManager` together via callbacks/events. Handles the multiplication shortcut (e.g. "5 3" → sends "15").
+- **`server.js`** — Wires `IrcManager` and `TelegramManager` together via callbacks/events. `onAnswer(text, question)` returns `{sent, reason}`; if not sent, the question stays active and the user is told why.
+- **`answer.js`** — Pure helper `normalizeAnswer` (multiplication shortcut, e.g. "5 3" → "15").
 - **`irc-manager.js`** — Persistent IRC connection to `irc.quakenet.org`. Emits events: `connected`, `scoring-alert`, `question`, `question-error`, `scoring-over`. Uses `stripColors: false` to preserve IRC color codes needed for parsing.
 - **`telegram-manager.js`** — Telegram polling bot. Tracks `activeQuestion` (one at a time, cleared after answer) and `pausedUsers` (Set). Auth is via `allowedUserIds` in config — empty array means no restriction.
 - **`parseQuestion.js`** — Pure function. Parses IRC color codes (`\x03CC`) to find math equations, validates exactly one red (`\x0304`) equation exists, returns `{success, question}`.
 - **`config.example.js`** — Configuration template checked into the repo. Copy to `config.js` (gitignored) and fill in `botToken` and `allowedUserIds` before running — `server.js` requires `./config`, not the example file.
+
+### Game rules — never validate answers
+
+The bot must **never** compute, check, or correct the answer to an equation. Evaluating the red equation to block, fix, or suggest answers is against the rules of the #Ranks game. The user must always be able to send a wrong answer; whatever they type (after the explicit "5 3" → "15" shortcut) goes to IRC as-is. Safeguards may only use information unrelated to the math: timing, connection state, message metadata, and so on.
 
 ### Parsing detail
 
@@ -39,4 +44,4 @@ Important library quirk: the `irc` package has its own internal `err_nicknameinu
 
 ### Telegram commands and per-user pause state
 
-`TelegramManager` handles `/start` (reveals the user's Telegram ID for `allowedUserIds`), `/status` (delegates to `server.js`'s `onStatusRequest` callback), `/pause`, and `/resume`. Paused user IDs live in the in-memory `pausedUsers` Set and are excluded from question/error broadcasts (`_getActiveChatIds()`) but can still submit an answer to an active question even while paused. All state (`activeQuestion`, `pausedUsers`) is in-memory only and resets on restart.
+`TelegramManager` handles `/start` (reveals the user's Telegram ID for `allowedUserIds`), `/status` (delegates to `server.js`'s `onStatusRequest` callback), `/pause`, and `/resume`. Paused user IDs live in the in-memory `pausedUsers` Set and are excluded from question/error broadcasts (`_getActiveChatIds()`) but can still submit an answer to an active question even while paused. Answers whose Telegram `msg.date` is more than 5s before the question's timestamp are ignored as stale. Note this does not catch a message the phone client queued while offline and delivered late: Telegram stamps `msg.date` when the server receives it, so such a message looks fresh. Every forwarded answer gets a `✅ Sent: <answer>` reply, so the user notices when an answer never reached the bot. All state (`activeQuestion`, `pausedUsers`) is in-memory only and resets on restart.

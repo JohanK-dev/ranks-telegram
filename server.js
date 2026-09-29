@@ -1,30 +1,23 @@
 const config = require("./config");
 const IrcManager = require("./irc-manager");
 const TelegramManager = require("./telegram-manager");
+const { normalizeAnswer } = require("./answer");
 
 // ─── Initialize components ───────────────────────────────────────────
 const ircManager = new IrcManager(config.irc);
 const telegram = new TelegramManager(config.telegram);
 
 // ─── Telegram → IRC (answers) ────────────────────────────────────────
-telegram.onAnswer = (answer) => {
-  const text = String(answer);
+// Returns { sent, answer } or { sent: false, reason }. When not sent, the question stays active so
+// the user can try again. The answer is never checked for correctness —
+// see CLAUDE.md ("Game rules").
+telegram.onAnswer = (text) => {
+  const answer = normalizeAnswer(text);
 
-  // Handle space-separated multiplication shortcut (e.g. "5 3" sends "15")
-  const parts = text.trim().split(" ");
-  if (parts.length === 2) {
-    const n1 = parseFloat(parts[0]);
-    const n2 = parseFloat(parts[1]);
-    if (!isNaN(n1) && !isNaN(n2)) {
-      const result = String(n1 * n2);
-      ircManager.sendAnswer(result);
-      telegram.sendAnswerConfirmation(result);
-      return;
-    }
+  if (!ircManager.sendAnswer(answer)) {
+    return { sent: false, reason: "IRC is not connected. Not sent, try again." };
   }
-
-  ircManager.sendAnswer(text);
-  telegram.sendAnswerConfirmation(text);
+  return { sent: true, answer };
 };
 
 // ─── Status request handler ──────────────────────────────────────────

@@ -1,5 +1,9 @@
 const TelegramBot = require("node-telegram-bot-api");
 
+// Tolerance for clock skew between this machine and Telegram, and for
+// msg.date only having second precision.
+const STALE_ANSWER_SLACK_MS = 5000;
+
 class TelegramManager {
   constructor(config) {
     this.config = config;
@@ -99,18 +103,42 @@ class TelegramManager {
       const text = (msg.text || "").trim();
       if (!text) return;
 
-      if (!this.activeQuestion) {
-        this.bot.sendMessage(msg.chat.id, "No active question right now.");
+      const question = this.activeQuestion;
+      if (!question) {
+        this._reply(msg.chat.id, "No active question right now.");
         return;
       }
 
-      console.log(`[TG] Answer received from ${msg.from.id}: ${text}`);
+      // msg.date is when Telegram received the message (second precision).
+      const sentAt = msg.date * 1000;
+      const age = ((question.timestamp - sentAt) / 1000).toFixed(0);
+      console.log(`[TG] Answer received from ${msg.from.id}: ${text} (sent ${new Date(sentAt).toISOString()}, question ${new Date(question.timestamp).toISOString()})`);
 
-      if (this.onAnswer) {
-        this.onAnswer(text);
+      // A message sent before the question existed can't be an answer to it
+      // (e.g. a backlog of updates delivered after the bot reconnects).
+      if (sentAt < question.timestamp - STALE_ANSWER_SLACK_MS) {
+        console.warn(`[TG] Ignoring stale answer "${text}", sent ${age}s before the question`);
+        this._reply(msg.chat.id, `Ignored "${text}": it was sent before the current question. Answer again.`);
+        return;
       }
 
-      this.activeQuestion = null;
+      const result = this.onAnswer ? this.onAnswer(text, question) : { sent: true, answer: text };
+      if (!result.sent) {
+        this._reply(msg.chat.id, `⚠️ ${result.reason}`);
+        return;
+      }
+      this.sendAnswerConfirmation(msg.chat.id, result.answer);
+
+      // Only clear if a newer question hasn't replaced it meanwhile
+      if (this.activeQuestion === question) {
+        this.activeQuestion = null;
+      }
+    });
+  }
+
+  _reply(chatId, text) {
+    this.bot.sendMessage(chatId, text).catch((err) => {
+      console.error(`[TG] Failed to send reply to ${chatId}:`, err.message);
     });
   }
 
@@ -179,8 +207,11 @@ class TelegramManager {
     console.log("[TG] Scoring over — question cleared (no notification sent)");
   }
 
-  async sendAnswerConfirmation(answer) {
+  // Confirms each forwarded answer, so a reply that never arrives (e.g.
+  // stuck in the phone's outbox) is noticeable by the missing confirmation.
+  async sendAnswerConfirmation(chatId, answer) {
     console.log(`[TG] Answer sent: ${answer}`);
+    this._reply(chatId, `✅ Sent: ${answer}`);
   }
 
   stop() {
