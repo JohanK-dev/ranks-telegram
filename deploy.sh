@@ -21,6 +21,6 @@ echo "==> Restarting $SERVICE"
 ssh -t "$REMOTE" "sudo systemctl restart $SERVICE"
 
 echo "==> Recent logs"
-ssh "$REMOTE" "sudo journalctl -u $SERVICE -n 20 --no-pager"
+ssh -t "$REMOTE" "sudo journalctl -u $SERVICE -n 20 --no-pager"
 
 echo "==> Deploy complete"
