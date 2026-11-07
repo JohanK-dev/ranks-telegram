@@ -23,7 +23,9 @@ This bot bridges the IRC game `#Ranks` on QuakeNet to Telegram. A bot called `MA
 
 - **`server.js`** — Wires `IrcManager` and `TelegramManager` together via callbacks/events. `onAnswer(text, question)` returns `{sent, reason}`; if not sent, the question stays active and the user is told why.
 - **`answer.js`** — Pure helper `normalizeAnswer` (multiplication shortcut, e.g. "5 3" → "15").
-- **`irc-manager.js`** — Persistent IRC connection to `irc.quakenet.org`. Emits events: `connected`, `scoring-alert`, `question`, `question-error`, `scoring-over`. Uses `stripColors: false` to preserve IRC color codes needed for parsing.
+- **`irc-manager.js`** — Game-level IRC logic on top of `IrcClient`. Emits events: `connected`, `joined`, `scoring-alert`, `question`, `question-error`, `scoring-over`. Exposes `currentNick` (shown in `/status`).
+- **`irc-client.js`** — Our own minimal IRC client (no third-party IRC library): TCP connect, `NICK`/`USER` registration, `PING`/`PONG` (incl. QuakeNet's pre-registration PING cookie), channel join/rejoin on kick, idle keepalive/dead-connection detection, reconnect with backoff, and nick handling. Never strips color codes — `parseQuestion` needs them. Takes an injectable `createConnection`/`now` for tests.
+- **`irc-protocol.js`** — Pure helpers: line parsing, RFC1459 nick case mapping (`sameNick`), fallback nick generation, and `buildLine`, which strips CR/LF/NUL from every param so Telegram text can never inject extra IRC commands.
 - **`telegram-manager.js`** — Telegram polling bot. Tracks `activeQuestion` (one at a time, cleared after answer) and `pausedUsers` (Set). Auth is via `allowedUserIds` in config — empty array means no restriction.
 - **`parseQuestion.js`** — Pure function. Parses IRC color codes (`\x03CC`) to find math equations, validates exactly one red (`\x0304`) equation exists, returns `{success, question}`.
 - **`config.example.js`** — Configuration template checked into the repo. Copy to `config.js` (gitignored) and fill in `botToken` and `allowedUserIds` before running — `server.js` requires `./config`, not the example file.
@@ -36,11 +38,15 @@ The bot must **never** compute, check, or correct the answer to an equation. Eva
 
 IRC messages use `\x03` as color delimiter followed by a 2-digit color code. `parseQuestion` splits on `\x03`, extracts equations matching `/(\d+[+\-*\/]\d+)/`, and identifies red equations by the `04` color code prefix. Returns an error if there are 0 or 2+ red equations.
 
-### Nickname reclaim (irc-manager.js)
+### Nickname handling (irc-client.js)
 
-The bot tries to hold a specific configured nickname on QuakeNet. If it's taken at connect time, the `irc` library falls back to an alternate nick on its own (raw `433`) — `IrcManager` does *not* retry immediately on `registered`, since the nick is known-taken at that point and an immediate retry would just collide again. Instead it reclaims the desired nick purely reactively, by watching `nick` and `quit` events for whoever is holding it and sending `NICK` the moment it frees up. This logic is split across the `registered`, `nick`, `quit`, and `raw` listeners in `connect()` — read all of them together to understand the reclaim flow.
+The bot tries to hold the configured `nickname`. If it's taken while registering (`432`/`433`/`437` before `001`), `IrcClient` tries `nickname + nickSuffix` (default `{`), then `{{`, and so on, shortened to fit `NICKLEN` (15 on QuakeNet; the server would otherwise silently truncate it back into the taken nick). It never uses a numeric `<nick>1` style fallback.
 
-Important library quirk: the `irc` package has its own internal `err_nicknameinuse` (433) handler (`node_modules/irc/lib/irc.js`) that fires independently of the `raw` listener here — on every 433 it increments an internal `nickMod` counter and actually sends `NICK <configured><nickMod>`, i.e. it renames the client. So any `NICK` attempt this module sends that collides (e.g. a reactive reclaim racing another client for the same nick) will itself trigger a real, visible nick change via the library's fallback — not a silent failure. Avoid sending speculative `NICK` requests for a nick you don't already know is free.
+Once registered on a fallback, it reclaims the nick in two ways, and only sends `NICK` when the nick is known to be free:
+- the holder's `QUIT` or `NICK` away (seen only if we share a channel with them);
+- an `ISON <nick>` check every 30s from `_tick()`, sending `NICK` only if the `303` reply doesn't list the nick. This covers the common case: after a disconnect, the ghost of our old connection times out before we've rejoined #ranks, so we never see its QUIT.
+
+A `433` *after* registration (a reclaim lost a race) is just logged; the server keeps our current nick, so nothing gets renamed. `_tryReclaim` rate-limits attempts to one per 10s.
 
 ### Telegram commands and per-user pause state
 

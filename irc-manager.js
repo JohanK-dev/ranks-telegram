@@ -1,13 +1,19 @@
-const irc = require("irc");
 const EventEmitter = require("events");
+const IrcClient = require("./irc-client");
 const parseQuestion = require("./parseQuestion");
 
 class IrcManager extends EventEmitter {
-  constructor(config) {
+  constructor(config, deps = {}) {
     super();
     this.config = config;
+    this.deps = deps; // injectable socket factory for tests
     this.client = null;
     this.connected = false;
+  }
+
+  /** Nick we currently hold on IRC (may be a fallback until reclaimed). */
+  get currentNick() {
+    return this.client ? this.client.nick : null;
   }
 
   connect() {
@@ -15,90 +21,52 @@ class IrcManager extends EventEmitter {
       `[IRC] Connecting to ${this.config.server} as ${this.config.nickname}...`
     );
 
-    this.client = new irc.Client(this.config.server, this.config.nickname, {
-      port: this.config.port,
-      channels: [this.config.channel],
-      autoRejoin: true,
-      autoConnect: true,
-      retryCount: 10,
-      retryDelay: 5000,
-      stripColors: false, // Need IRC color codes to identify the red equation
-      encoding: "utf-8",
-      userName: this.config.nickname,
-      realName: "Ranks Scoring Bot",
-    });
+    this.client = new IrcClient(
+      {
+        server: this.config.server,
+        port: this.config.port,
+        nickname: this.config.nickname,
+        nickSuffix: this.config.nickSuffix || "{",
+        userName: this.config.nickname,
+        realName: "Ranks Scoring Bot",
+        channel: this.config.channel,
+      },
+      this.deps
+    );
 
-    this.client.addListener("registered", () => {
+    this.client.on("log", (text) => console.log(`[IRC] ${text}`));
+
+    this.client.on("registered", (nick) => {
       console.log("[IRC] Connected and registered on QuakeNet");
       this.connected = true;
-
-      if (this.client.nick !== this.config.nickname) {
-        // Don't retry NICK here — we just failed to get it during the
-        // connection handshake (that's why we're on a fallback nick), so
-        // an immediate retry would only collide again. The irc library's
-        // own 433 handler reacts to that collision by renaming us to yet
-        // another fallback, producing a visible, pointless nick change.
-        // The nick/quit listeners below reclaim it reactively once it
-        // actually frees up.
-        console.log(`[IRC] Registered as "${this.client.nick}", will reclaim "${this.config.nickname}" once it frees up`);
+      if (!this.client.hasDesiredNick()) {
+        // Reclaimed automatically by IrcClient once the server reports the
+        // nick free (periodic ISON check, or the holder's QUIT/NICK).
+        console.log(`[IRC] Registered as "${nick}", will reclaim "${this.config.nickname}" once it frees up`);
       }
-
       this.emit("connected");
     });
 
-    // Reclaim desired nick when the current holder renames away from it
-    this.client.addListener("nick", (oldNick, newNick) => {
-      if (!this.connected || !this.client) return;
-      if (this.client.nick === this.config.nickname) return;
-      if (oldNick === this.config.nickname) {
-        console.log(`[IRC] "${this.config.nickname}" freed (renamed to "${newNick}"), reclaiming`);
-        this.client.send("NICK", this.config.nickname);
-      }
+    this.client.on("nick", (nick) => {
+      console.log(`[IRC] Now known as "${nick}"`);
     });
 
-    // Reclaim desired nick when the current holder quits
-    this.client.addListener("quit", (nick) => {
-      if (!this.connected || !this.client) return;
-      if (this.client.nick === this.config.nickname) return;
-      if (nick === this.config.nickname) {
-        console.log(`[IRC] "${this.config.nickname}" freed (holder quit), reclaiming`);
-        this.client.send("NICK", this.config.nickname);
-      }
+    this.client.on("joined", (channel) => {
+      console.log(`[IRC] Joined ${channel}`);
+      this.emit("joined", channel);
     });
 
-    this.client.addListener("join", (channel, nick) => {
-      if (nick === this.client.nick) {
-        console.log(`[IRC] Joined ${channel}`);
-        this.emit("joined", channel);
-      }
-    });
+    this.client.on("message", (message) => this._handleRawMessage(message));
 
-    this.client.addListener("raw", (message) => {
-      if (message.rawCommand === "433") {
-        // Nick in use — the irc library handles this with its own fallback.
-        // We reclaim our desired nick reactively via nick/quit events instead
-        // of fighting the library's built-in 433 handler here.
-        console.log(`[IRC] Nick "${message.args[1]}" is in use, waiting for it to free up`);
-        return;
-      }
-
-      this._handleRawMessage(message);
-    });
-
-    this.client.addListener("error", (error) => {
-      console.error("[IRC] Error:", error.command, error.args?.join(" "));
-    });
-
-    this.client.addListener("netError", (error) => {
+    this.client.on("netError", (error) => {
       console.error("[IRC] Network error:", error.message);
+    });
+
+    this.client.on("disconnected", () => {
       this.connected = false;
     });
 
-    this.client.addListener("abort", () => {
-      console.error("[IRC] Connection aborted after max retries");
-      this.connected = false;
-      setTimeout(() => this.connect(), 30000);
-    });
+    this.client.connect();
   }
 
   _handleRawMessage(message) {
@@ -142,7 +110,7 @@ class IrcManager extends EventEmitter {
   }
 
   _parseQuestion(text) {
-  return parseQuestion(text);
+    return parseQuestion(text);
   }
 
   sendAnswer(answer) {
@@ -152,13 +120,12 @@ class IrcManager extends EventEmitter {
     }
 
     console.log(`[IRC] Sending answer to ${this.config.machineNick}: ${answer}`);
-    this.client.say(this.config.machineNick, answer);
-    return true;
+    return this.client.say(this.config.machineNick, answer);
   }
 
   disconnect() {
     if (this.client) {
-      this.client.disconnect("Leaving");
+      this.client.quit("Leaving");
       this.connected = false;
     }
   }

@@ -4,6 +4,7 @@ module.exports = {
     server: "irc.quakenet.org",
     port: 6667,
     nickname: "YourNick",        // Your IRC nickname
+    nickSuffix: "{",             // If the nick is taken at connect, append this ("YourNick{", "YourNick{{", ...) and reclaim it once free
     channel: "#Ranks",
     machineNick: "MACHINE[]",    // The bot that sends scoring questions
   },

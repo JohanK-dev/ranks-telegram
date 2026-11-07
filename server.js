@@ -27,7 +27,11 @@ telegram.onStatusRequest = () => {
     `IRC: ${ircManager.connected ? "Connected" : "Disconnected"}\n` +
     `Server: ${config.irc.server}\n` +
     `Channel: ${config.irc.channel}\n` +
-    `Nick: ${config.irc.nickname}\n` +
+    `Nick: ${ircManager.currentNick || config.irc.nickname}` +
+    (ircManager.currentNick && ircManager.currentNick !== config.irc.nickname
+      ? ` (reclaiming ${config.irc.nickname})`
+      : "") +
+    `\n` +
     `Question active: ${telegram.activeQuestion ? "Yes" : "No"}`
   );
 };
